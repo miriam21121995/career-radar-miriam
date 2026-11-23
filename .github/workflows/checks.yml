@@ -1,0 +1,35 @@
+name: Career Radar checks
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate backend syntax
+        run: node --check backend/worker.js
+      - name: Validate frontend inline JavaScript
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const vm = require('node:vm');
+          const html = fs.readFileSync('frontend/index.html','utf8');
+          const match = html.match(/<script>([\s\S]*?)<\/script>/);
+          if (!match) throw new Error('Inline frontend script not found');
+          new vm.Script(match[1],{filename:'frontend/index.html'});
+          console.log('Frontend JavaScript syntax OK');
+          NODE
+      - name: Run all regression checks
+        run: |
+          for test in tests/*.test.cjs; do
+            echo "Running $test"
+            node "$test"
+          done
