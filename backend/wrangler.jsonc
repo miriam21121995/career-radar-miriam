@@ -1,0 +1,18 @@
+{
+  "name": "career-radar-api",
+  "main": "worker.js",
+  "compatibility_date": "2026-11-19",
+  "workers_dev": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "career-radar-db",
+      "database_id": "08ff556b-fb9b-420e-8ea0-d068ba40d18f"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "*/30 * * * *"
+    ]
+  }
+}
