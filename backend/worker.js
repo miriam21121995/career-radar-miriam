@@ -1,4 +1,4 @@
-// Career Radar API V25 (atomic refresh leases, safe retries, Teamtailor verified-domain fallback, CPU-saving compact reads; V42 Workable + Recruitee; V41 Workday limited connector + V40 web discovery) — previous features preserved; originally V15.1 — Greenhouse, Lever, Ashby, SmartRecruiters, Workday.
+// Career Radar API V26 (company catalog read-only; atomic refresh leases, safe retries, Teamtailor verified-domain fallback, CPU-saving compact reads; V42 Workable + Recruitee; V41 Workday limited connector + V40 web discovery) — previous features preserved; originally V15.1 — Greenhouse, Lever, Ashby, SmartRecruiters, Workday.
 // Cloudflare Worker + D1. CV e candidature private restano nel browser.
 
 // V19: conservative text-derived signals. Explicitly NOT verified employment terms.
@@ -921,6 +921,15 @@ export default {
         return json({ok:true,sources:entries.map(([id,s])=>({id,name:s.name,careers:s.careers,sector:s.sector,location:s.location,ats:s.ats||'greenhouse',registry:id.startsWith('custom-')?'D1':'configured'})),
           note:'Le nuove fonti D1 devono essere approvate nel pannello Cloudflare. Nessuna scrittura pubblica.'},200,origin);
       }catch(e){console.error('sources registry error',e);return fail('Impossibile caricare le fonti',500,origin)}
+    }
+    // V26: read-only D1 company catalog for frontend synchronization.
+    // No CV, application, credentials or browser-specific data are sent to the API.
+    if (request.method==='GET'&&url.pathname==='/api/companies') {
+      try {
+        const rows=await env.DB.prepare(`SELECT id,name,sector,location,website_url,careers_url,
+          source_type,monitoring_status FROM companies ORDER BY name LIMIT 1000`).all();
+        return json({ok:true,companies:rows.results||[]},200,origin);
+      }catch(e){console.error('company catalog error',e);return fail('Catalogo temporaneamente non disponibile',500,origin)}
     }
     if (request.method==='GET'&&url.pathname==='/api/coverage') {
       try {
