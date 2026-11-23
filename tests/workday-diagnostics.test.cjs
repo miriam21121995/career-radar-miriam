@@ -1,0 +1,21 @@
+const fs=require('node:fs');
+const vm=require('node:vm');
+const assert=require('node:assert/strict');
+const path=require('node:path');
+const source=fs.readFileSync(path.join(__dirname,'../backend/worker.js'),'utf8');
+const start=source.indexOf('function workdaySite(raw)');
+const end=source.indexOf('// V42: Workable',start);
+assert(start>=0&&end>start,'Workday module not found');
+const ctx={URL,console,AbortSignal,encodeURIComponent,fetch:async()=>({ok:false,status:429,headers:{get:k=>k==='cf-mitigated'?'challenge':null}})};
+vm.createContext(ctx);
+vm.runInContext(source.slice(start,end)+';globalThis.testWorkday={workdaySite,getWorkdayJobs}',ctx);
+(async()=>{
+const diagnostic={};
+const spec={careers:'https://hrhub.wd3.myworkdayjobs.com/en-US/Euronext_Career_Page'};
+assert.equal(ctx.testWorkday.workdaySite(spec.careers).tenant,'hrhub');
+assert.equal(ctx.testWorkday.workdaySite(spec.careers).site,'Euronext_Career_Page');
+const jobs=await ctx.testWorkday.getWorkdayJobs(spec,{probe:true,diagnostic});
+assert.equal(jobs,null);
+assert.equal(diagnostic.error,'HTTP 429 (verifica anti-bot)');
+console.log('PASS: Workday Euronext parsing and safe 429 diagnostic');
+})().catch(e=>{console.error(e);process.exitCode=1});
