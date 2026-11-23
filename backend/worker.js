@@ -998,3 +998,17 @@ export default {
           const hasDescription=compact?Number(j.description_present||0):Number(Boolean(j.description));
           const {description_present,...rest}=j;
           return {...rest,work_mode:signals.workMode,seniority_derived:signals.seniority,
+            employment_derived:signals.employment,contract_derived:signals.contract,
+            has_description:hasDescription,description:compact?'':j.description};
+        });
+        return json({ok:true,jobs,limit,offset},200,origin);
+      } catch(e) { console.error('jobs DB error',e);return fail('Errore nel recupero degli annunci',500,origin); }
+    }
+    const match=url.pathname.match(/^\/api\/refresh\/([a-z0-9-]+)$/);
+    if (request.method==='POST'&&match) {
+      try { return await refreshCompany(request,env,origin,match[1]); }
+      catch(e) { console.error('refresh error',e);return fail('Errore durante il refresh. Riprova.',500,origin); }
+    }
+    return fail('Endpoint inesistente',404,origin);
+  }
+};
