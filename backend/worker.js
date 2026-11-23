@@ -279,7 +279,7 @@ function workdaySite(raw){
   return {host,tenant,site,careers:'https://'+host+'/'+site};
  }catch{return null}
 }
-async function getWorkdayJobs(spec,{probe=false}={}){
+async function getWorkdayJobs(spec,{probe=false,diagnostic=null}={}){
  const site=workdaySite(spec.careers);
  if(!site)return null;
  /** @type {Array<any> & {partial?:boolean,reportedTotal?:number}} */
@@ -291,9 +291,12 @@ async function getWorkdayJobs(spec,{probe=false}={}){
     method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},
     body:JSON.stringify({appliedFacets:{},limit:20,offset,searchText:''}),
     signal:AbortSignal.timeout(12000),redirect:'error'});
-   if(!response.ok)throw Error('Workday HTTP '+response.status);
+   if(!response.ok){
+      if(diagnostic)diagnostic.error='HTTP '+response.status+(response.headers.get('cf-mitigated')==='challenge'?' (verifica anti-bot)':'');
+      throw Error('Workday HTTP '+response.status);
+    }
    const data=await response.json();
-   if(!Array.isArray(data.jobPostings))throw Error('Workday payload non valido');
+   if(!Array.isArray(data.jobPostings)){if(diagnostic)diagnostic.error='Formato JSON Workday inatteso';throw Error('Workday payload non valido')}
    if(offset===0)total=Number(data.total)||data.jobPostings.length;
    for(const x of data.jobPostings){
     const path=String(x.externalPath||'');
@@ -308,7 +311,9 @@ async function getWorkdayJobs(spec,{probe=false}={}){
    if(data.jobPostings.length<20||offset+20>=total)break;
   }catch(e){
    // A partial Workday snapshot is not a full picture. Keep previously imported rows.
-   if(!jobs.length){console.warn('Workday feed unavailable',site.host,site.site,String(e));return null}
+   if(!jobs.length){
+      if(diagnostic&&!diagnostic.error)diagnostic.error=String(e?.name)==='TimeoutError'?'Timeout dopo 12 secondi':'Connessione non riuscita ('+String(e?.name||'errore di rete').slice(0,50)+')';
+      console.warn('Workday feed unavailable',site.host,site.site,String(e));return null}
    jobs.partial=true;break;
   }
  }
@@ -668,8 +673,12 @@ async function probePublicBoard(url,origin,env){
  if(raw.length>250)return fail('URL troppo lungo',400,origin);
  const spec=publicBoardSpec(raw);
  if(!spec)return fail('Incolla un link Greenhouse, Lever, Ashby, SmartRecruiters, Teamtailor, Workday, Workable o Recruitee.',400,origin);
- const jobs=await getATSJobs(spec,{probe:true});
- if(!jobs)return fail('Bacheca riconosciuta ma feed non raggiungibile. Verifica il link o riprova.',502,origin);
+ const diagnostic={};
+ const jobs=spec.ats==='workday'?await getWorkdayJobs(spec,{probe:true,diagnostic}):await getATSJobs(spec,{probe:true});
+ if(!jobs){
+  const reason=spec.ats==='workday'&&diagnostic.error?' Diagnostica Workday: '+diagnostic.error+'.':'';
+  return fail('Bacheca riconosciuta ma feed non raggiungibile.'+reason+' Verifica il link o riprova.',502,origin);
+ }
  const valid=jobs.filter(j=>validURL(j.absolute_url)&&String(j.title||'').trim());
  return json({ok:true,ats:spec.ats,board:spec.board,careers:spec.careers,
    total:jobs.reportedTotal||valid.length,partial:Boolean(jobs.partial),sample:valid.slice(0,3).map(j=>({title:j.title,location:j.location?.name||''})),
