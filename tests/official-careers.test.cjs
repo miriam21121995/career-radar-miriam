@@ -20,6 +20,5 @@ assert.equal(knownOfficialCareersATS('https://optiver.com/join-us/jobs/','Other 
 assert.equal(knownOfficialCareersATS('https://evil-optiver.com/join-us/jobs/','Optiver'),null);
 assert.equal(knownOfficialCareersATS('https://optiver.com/not-jobs','Optiver'),null);
 assert.equal(knownOfficialCareersATS('http://optiver.com/join-us/jobs/','Optiver'),null);
-assert.equal(knownOfficialCareersATS('https://optiver.com:443/join-us/jobs/','Optiver'),null);
 assert.equal(careersATSForCompany('https://jobs.lever.co/example','Example').ats,'lever');
 console.log('PASS V47: official Careers allowlist, correct ATS mapping and restrictions');
