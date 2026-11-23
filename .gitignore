@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+.dev.vars
+*.pem
+*.key
+node_modules/
+.DS_Store
+*.sqlite
+*.sqlite3
+*.db
+backups/
+private/
+cv-personali/
