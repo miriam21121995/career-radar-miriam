@@ -20,4 +20,4 @@ Piattaforma personale per Job Intelligence, Company Discovery, monitoraggio dell
 
 ## Baseline ricevuta
 
-Codice backend V25 e frontend V45 forniti il 23/11/2026. Le versioni V26 (backend) e V46 (frontend) erano state preparate, ma non risulta confermato il loro deploy. Verificare sempre l'allineamento fra GitHub e Cloudflare prima delle modifiche.
+Codice backend V25 e frontend V45 forniti il 23/11/2026 e caricati nel repository il 23/11/2026. Baseline di sviluppo, non confermata come identica al deployment Cloudflare. Le versioni V26 (backend) e V46 (frontend) erano state preparate, ma non risulta confermato il loro deploy. Verificare sempre l'allineamento fra GitHub e Cloudflare prima delle modifiche.
