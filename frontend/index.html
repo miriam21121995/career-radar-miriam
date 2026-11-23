@@ -1103,6 +1103,26 @@ function atsBoardFromURL(value){
     return null;
   }catch{return null}
 }
+
+// V47: Verified mappings for official company-hosted Careers pages.
+// A mapping is only a candidate: /api/ats-probe must confirm the actual public feed.
+// Restrict by the exact official hostname, official jobs path and company identity;
+// never convert arbitrary company sites to guessed ATS board tokens.
+function knownOfficialCareersATS(value,companyName){
+  try{
+    const u=new URL(value||'');
+    if(u.protocol!=='https:'||u.username||u.password||u.port)return null;
+    const host=u.hostname.toLowerCase().replace(/^www\./,'');
+    const path=u.pathname.replace(/\/+$/,'')||'/';
+    if(nameKey(companyName)==='optiver'&&host==='optiver.com'&&path==='/join-us/jobs'){
+      return {ats:'greenhouse',board:'optiverus',url:'https://job-boards.greenhouse.io/optiverus',official:u.origin+'/join-us/jobs/',candidate:true};
+    }
+    return null;
+  }catch{return null}
+}
+function careersATSForCompany(value,companyName){
+  return atsBoardFromURL(value)||knownOfficialCareersATS(value,companyName);
+}
 function companyJobSearchUrl(name,place='') {
   // User-initiated link to LinkedIn. No automated fetching or scraping from LinkedIn.
   const search=String(name||'').trim().slice(0,100);
@@ -1267,7 +1287,7 @@ function manualSourceV44Markup(){
  <p>Hai già trovato il link Careers di un'azienda? Incollalo qui. Prima controlliamo che il feed funzioni, poi puoi attivarlo senza SQL. Le 260 aziende esistenti non vengono cancellate.</p>
  <div class="manual-source-v44-grid">
  <label>Nome azienda<input class="field" id="manual-v44-name" list="manual-v44-names" maxlength="140" autocomplete="off" placeholder="Es. Euronext" oninput="manualSourceV44Changed()"><datalist id="manual-v44-names">${names.map(n=>`<option value="${esc(n)}"></option>`).join('')}</datalist></label>
- <label>URL diretto Careers / ATS<input class="field" id="manual-v44-url" type="url" maxlength="250" placeholder="https://jobs.ashbyhq.com/azienda" oninput="manualSourceV44Changed()"></label>
+ <label>URL Careers ufficiale / ATS<input class="field" id="manual-v44-url" type="url" maxlength="250" placeholder="https://jobs.ashbyhq.com/azienda" oninput="manualSourceV44Changed()"></label>
  </div>
  <div class="manual-source-v44-actions"><button type="button" class="btn primary" id="manual-v44-test" onclick="manualSourceV44Probe()">Verifica feed</button><small class="muted">Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Teamtailor, Workable e Recruitee (solo feed accessibili).</small></div>
  <div class="manual-source-v44-result" id="manual-v44-result" role="status">Inserisci nome e link della bacheca Careers, poi premi «Verifica feed».</div>
@@ -1289,9 +1309,10 @@ async function manualSourceV44Probe(){
  let url;try{url=new URL(input);if(url.protocol!=='https:')throw Error('https')}catch{out.textContent='Incolla un URL completo che inizia con https://';return}
  btn.disabled=true;out.textContent='Controllo del feed pubblico in corso…';
  try{
-  const resp=await fetch(API_BASE+'/api/ats-probe?url='+encodeURIComponent(url.href),{cache:'no-store',signal:AbortSignal.timeout(30000)});
+  const candidate=careersATSForCompany(url.href,name);
+   const resp=await fetch(API_BASE+'/api/ats-probe?url='+encodeURIComponent(candidate?.url||url.href),{cache:'no-store',signal:AbortSignal.timeout(30000)});
   const result=await resp.json();
-  if(!resp.ok||!result.ok)throw Error(result.message||'Feed non raggiungibile');
+  if(!resp.ok||!result.ok)throw Error((candidate?'Il candidato Greenhouse non è ancora confermato: ':'')+(result.message||'Feed non raggiungibile'));
   const existing=careerSources.find(s=>nameKey(s.name)===nameKey(name));
   if(result.monitored){out.innerHTML=`<div class="mini-verify"><b>✓ La bacheca è già monitorata.</b><p>${esc(result.ats)} · ${Number(result.total)||0} offerte rilevate. Non serve attivarla nuovamente.</p></div>`;return}
   if(existing){out.innerHTML=`<div class="mini-verify"><b>Attenzione: l'azienda risulta già monitorata.</b><p>Fonte esistente: ${esc(existing.careers||'Non disponibile')}. Non attivo un secondo feed senza verificarne la corrispondenza.</p></div>`;return}
@@ -1523,10 +1544,10 @@ async function verifyAuditQuickAdd(){
   const message=document.getElementById('audit-quick-message');
   const btn=document.getElementById('audit-quick-verify');
   if(!c||!input||!message||!btn)return;
-  const parsed=atsBoardFromURL(input.value.trim());
-  if(!parsed){message.textContent='Link non riconosciuto. Inserisci un URL di bacheca ATS supportata, non il sito generico.';return;}
-  if(c.careers_url&&c.careers_url!==parsed.url&&!confirm('Sostituire il link Careers già salvato per '+c.name+'?'))return;
-  btn.disabled=true;message.textContent='Verifica del feed in corso…';
+  const parsed=careersATSForCompany(input.value.trim(),c.name);
+  if(!parsed){message.textContent='URL non riconosciuto come ATS. Conserva il link ufficiale Careers: non tutti i siti aziendali hanno un feed pubblico. Per Optiver è disponibile una corrispondenza da verificare.';return;}
+  if(c.careers_url&&c.careers_url!==parsed.url&&c.careers_url!==parsed.official&&!confirm('Sostituire il link Careers già salvato per '+c.name+'?'))return;
+  btn.disabled=true;message.textContent=parsed.candidate?'Trovato candidato Greenhouse collegato a Optiver; verifico che il feed sia realmente disponibile…':'Verifica del feed in corso…';
   try{
     const r=await fetch(API_BASE+'/api/ats-probe?url='+encodeURIComponent(parsed.url),{cache:'no-store',signal:AbortSignal.timeout(25000)});
     const result=await r.json();
@@ -1537,7 +1558,7 @@ async function verifyAuditQuickAdd(){
     if(!data.careerAudit)data.careerAudit={};
     data.careerAudit[nameKey(current.name)]={url:current.careers_url,ats:parsed.ats,board:parsed.board,verified:true,found:result.total,checkedAt:new Date().toISOString()};
     save();renderCareerAudit();
-    message.textContent='✓ Feed verificato ('+result.total+' offerte). Salvato localmente. '+(result.monitored?'È già monitorato.':'Per monitorarlo: «Copia SQL per le fonti verificate» e approva in D1.');
+    message.textContent='✓ Feed verificato ('+result.total+' offerte). Salvato localmente. '+(result.monitored?'È già monitorato.':'Ora puoi approvarne l’attivazione dall’audit; il link ufficiale resta consultabile.');
   }catch(e){message.textContent='Verifica non riuscita: '+String(e.message||e)+'. Non è stato salvato nulla.';}
   finally{btn.disabled=false;}
 }
