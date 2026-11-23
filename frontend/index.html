@@ -777,7 +777,7 @@ function geoOf(j){
  function addCountry(code){const v=GEO_COUNTRIES[code];if(!v)return;countries.add(code);regions.add(v[1]);}
  function addCity(v){const city=String(v||'').trim().replace(/^[\s-]+|[\s-]+$/g,'');if(city.length<2||city.length>85||noise.test(city))return;if(GEO_REGION_LOOKUP.has(geoNorm(city))||GEO_LOOKUP.has(geoNorm(city)))return;if(/^(?:\d+|[A-Z]{2}\s*\d+)$/.test(city))return;cities.add(city);const country=GEO_HINTS.get(geoNorm(city));if(country)addCountry(country);}
  for(const place of places){
-   const fragment=place.replace(/^(?:remote|remoto|hybrid|ibrido|onsite|on-site|based in|location)\s*[:\-–]\s*/i,'').trim();
+   const fragment=place.replace(/\(([^)]{1,100})\)/g,', $1').replace(/^(?:remote|remoto|hybrid|ibrido|onsite|on-site|based in|location)\s*[:\-–]\s*/i,'').trim();
    if(!fragment||noise.test(fragment))continue;
    const area=GEO_REGION_LOOKUP.get(geoNorm(fragment));if(area){regions.add(area);continue;}
    const directCountry=GEO_LOOKUP.get(geoNorm(fragment));if(directCountry){addCountry(directCountry[0]);continue;}
@@ -824,7 +824,7 @@ function geoPicker(key,title,items){
 }
 function geoSearch(el){const term=geoNorm(el.value);el.closest('.multi-options')?.querySelectorAll('label[data-geo-opt]').forEach(label=>{label.style.display=geoNorm(label.dataset.geoOpt).includes(term)?'':'none'});}
 function geoControls(){const f=geoFacets(),countries=geoAvailableCountries(f),cities=geoAvailableCities(f);return `<div class="geo-v46-heading"><strong>Località delle offerte · filtri a cascata</strong><span class="tiny muted">${f.regions.length} aree · ${f.countries.length} paesi · ${f.cities.length} città rilevate nei dati caricati</span></div><div class="geo-v46">${geoPicker('jobRegion','Aree geografiche',f.regions.map(x=>[x,x]))}${geoPicker('jobCountry','Paesi',countries.map(code=>[code,GEO_COUNTRIES[code]?.[0]||code]))}${geoPicker('jobGeoCity','Città',cities.map(c=>[c,c]))}</div><div class="geo-v46-note">✓ Le offerte <b>da remoto</b> vengono incluse anche se riportano un altro paese o città. Verifica sempre i vincoli di residenza, fuso orario e autorizzazione al lavoro nell'annuncio: “Remoto” non significa necessariamente “da qualsiasi paese”. Le sedi non identificabili non vengono attribuite a una città inventata.</div>`;}
-function geoUpdateUI(){const box=document.getElementById('geo-v46-root');if(box)box.innerHTML=geoControls();refreshJobs();}
+function geoUpdateUI(){const box=document.getElementById('geo-v46-root');if(box){const opened=[...box.querySelectorAll('details.multi-picker')].map((el,i)=>el.open?i:-1).filter(i=>i>=0);box.innerHTML=geoControls();const menus=box.querySelectorAll('details.multi-picker');opened.forEach(i=>{if(menus[i])menus[i].open=true;});}refreshJobs();}
 function geoChange(key,value,checked){filters.jobCity=[];const arr=filters[key]||[];filters[key]=checked?[...new Set([...arr,value])]:arr.filter(x=>x!==value);
  if(key==='jobRegion'){filters.jobCountry=[];filters.jobGeoCity=[];}
  else if(key==='jobCountry'){filters.jobGeoCity=[];}
