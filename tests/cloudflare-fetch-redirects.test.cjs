@@ -7,7 +7,7 @@ const src=fs.readFileSync(path.join(__dirname,'../backend/worker.js'),'utf8');
 // Cloudflare Workers throws TypeError before any network request when
 // redirect:'error' is passed to fetch. Check every ATS request, not just Cboe.
 assert(!/redirect\s*:\s*['"]error['"]/.test(src), 'Cloudflare-incompatible redirect mode found');
-assert.equal((src.match(/redirect\s*:\s*['"]manual['"]/g)||[]).length, 4);
+assert((src.match(/redirect\s*:\s*['"]manual['"]/g)||[]).length >= 5, 'all ATS and Workday detail fetches must reject redirects');
 
 const begin=src.indexOf('function workdaySite(raw)');
 const end=src.indexOf('// V42: Workable',begin);
