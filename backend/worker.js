@@ -282,6 +282,12 @@ function workdaySite(raw){
   return {host,tenant,site,careers:'https://'+host+'/'+site};
  }catch{return null}
 }
+// Workday list entries can have "2 Locations"; inspect detail for ambiguous Cboe jobs.
+function workdayLocationLabel(v){
+ if(typeof v==='string')return v.trim();
+ if(v&&typeof v==='object')return String(v.descriptor||v.name||v.location||'').trim();
+ return '';
+}
 async function getWorkdayJobs(spec,{probe=false,diagnostic=null}={}){
  const site=workdaySite(spec.careers);
  if(!site)return null;
@@ -289,6 +295,8 @@ async function getWorkdayJobs(spec,{probe=false,diagnostic=null}={}){
  // The probe must cover the same range as the scheduled importer. A board with
   // more than 20 jobs is not inherently incomplete.
   const jobs=[];const seen=new Set(),max=300;
+ const isCboe=site.tenant.toLowerCase()==='cboe'&&site.site.toLowerCase()==='external_career_cboe';
+ const ambiguousLocations=[];
  let total=0;
  for(let offset=0;offset<max;offset+=20){
   try{
@@ -309,9 +317,11 @@ async function getWorkdayJobs(spec,{probe=false,diagnostic=null}={}){
     const canonical=`https://${site.host}/${encodeURIComponent(site.site)}${path}`;
     if(seen.has(canonical))continue;
     seen.add(canonical);
+    const listLocation=String(x.locationsText||'');
     jobs.push({id:path.split('/').pop()||path,title:String(x.title||'').trim(),
-     location:{name:String(x.locationsText||'')},absolute_url:canonical,
+     location:{name:listLocation},absolute_url:canonical,
      content:[x.bulletFields?.join(' · ')||'',x.remoteType||''].filter(Boolean).join('\n')});
+    if(isCboe&&/\b(?:multiple|\d+)\s+locations?\b/i.test(listLocation))ambiguousLocations.push({index:jobs.length-1,path});
    }
    if(data.jobPostings.length<20||offset+20>=total)break;
   }catch(e){
@@ -321,6 +331,27 @@ async function getWorkdayJobs(spec,{probe=false,diagnostic=null}={}){
       console.warn('Workday feed unavailable',site.host,site.site,String(e));return null}
    jobs.partial=true;break;
   }
+ }
+ // Bound the number of extra Workday subrequests to protect the Cloudflare Free quota.
+ // Keep the original entry if its detail is unavailable and report incomplete locations.
+ if(isCboe&&ambiguousLocations.length){
+  const limit=24,selected=ambiguousLocations.slice(0,limit);
+  let incomplete=ambiguousLocations.length>limit;
+  for(let i=0;i<selected.length;i+=4){
+   await Promise.all(selected.slice(i,i+4).map(async ({index,path})=>{
+    try{
+     const endpoint='https://'+site.host+'/wday/cxs/'+encodeURIComponent(site.tenant)+'/'+encodeURIComponent(site.site)+path;
+     const r=await fetch(endpoint,{headers:{Accept:'application/json'},signal:AbortSignal.timeout(9000),redirect:'manual'});
+     if(!r.ok)throw Error('Workday detail HTTP '+r.status);
+     const json=await r.json(),info=json?.jobPostingInfo||{};
+     const locs=[info.location,...(Array.isArray(info.additionalLocations)?info.additionalLocations:[])].map(workdayLocationLabel).filter(Boolean);
+     const unique=[...new Set(locs)];
+     if(!unique.length)throw Error('Sedi non disponibili');
+     jobs[index].location.name=unique.join(' / ');
+    }catch(e){incomplete=true;console.warn('Workday location detail unavailable',site.host,String(e))}
+   }));
+  }
+  jobs.locationCoverageIncomplete=incomplete;
  }
  jobs.partial=Boolean(jobs.partial||total>max);
  jobs.reportedTotal=total;
@@ -717,7 +748,7 @@ async function probePublicBoard(url,origin,env){
  }
  const valid=jobs.filter(j=>validURL(j.absolute_url)&&String(j.title||'').trim());
  return json({ok:true,ats:spec.ats,board:spec.board,careers:spec.careers,
-   total:jobs.reportedTotal||valid.length,partial:Boolean(jobs.partial),sample:valid.slice(0,3).map(j=>({title:j.title,location:j.location?.name||''})),
+   total:jobs.reportedTotal||valid.length,partial:Boolean(jobs.partial),locationCoverageIncomplete:Boolean(jobs.locationCoverageIncomplete),sample:valid.slice(0,3).map(j=>({title:j.title,location:j.location?.name||''})),
    monitored:(await monitoredSources(env)).some(([id,s])=>s.ats===spec.ats&&s.board.toLowerCase()===spec.board.toLowerCase()),note:'Feed pubblico verificato. Una nuova fonte va approvata nel database D1 Cloudflare prima del monitoraggio automatico.'},200,origin);
 }
 
