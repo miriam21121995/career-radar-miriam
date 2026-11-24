@@ -861,6 +861,7 @@ function sourceAuditInfo(s){
  const attempt=String(s.lastAttempt||'');
  const checked=String(s.lastChecked||'').trim();
  if(explicit==='error')return {id:'failed',label:'Ultimo controllo fallito',hint:s.errorText||'Errore di importazione registrato'};
+ if(explicit==='partial')return {id:'partial',label:'Copertura incompleta',hint:s.errorText||'Import parziale: alcune offerte potrebbero mancare'};
  if(explicit==='success'){
   const parsed=Date.parse(attempt.replace(' ','T')+(attempt.endsWith('Z')?'':'Z'));
   const hours=Number.isFinite(parsed)?(Date.now()-parsed)/3600000:null;
@@ -902,7 +903,7 @@ function exportCoverageCSV(){
  const url=URL.createObjectURL(new Blob([payload],{type:'text/csv;charset=utf-8;'}));
  const a=document.createElement('a');a.href=url;a.download='career_radar_monitoraggio_fonti.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
-function coverageUrgentCount(){return (live.coverage||[]).filter(s=>['never','stale','zero'].includes(sourceAuditInfo(s).id)).length;}
+function coverageUrgentCount(){return (live.coverage||[]).filter(s=>['never','stale','zero','failed','partial'].includes(sourceAuditInfo(s).id)).length;}
 
 function openRefreshPanel(){
  sourceAuditScope='all';sourceAuditSearch='';
@@ -910,11 +911,11 @@ function openRefreshPanel(){
  const checked=sources.filter(s=>Boolean(s.lastChecked)).length;
  const never=sources.length-checked;
  const zero=sources.filter(s=>s.lastChecked&&Number(s.jobs)===0).length;
- const dated=sources.filter(s=>sourceAuditInfo(s).id==='stale').length;
- const content=`<div class="source-v30-intro"><b>Monitoraggio delle fonti Careers</b><p>La nuova API registra l’esito reale degli import: <b>riuscito</b>, <b>fallito</b> oppure <b>non ancora verificato</b>. Le esecuzioni precedenti rimangono indicate come non certificate finché non vengono ripetute.</p></div>
- <div class="source-health-cards"><div><b>${sources.length}</b><span>Fonti configurate</span></div><div><b>${checked}</b><span>Con data registrata</span></div><div><b>${never}</b><span>Mai controllate</span></div><div><b>${zero+dated}</b><span>Zero offerte o datate*</span></div></div>
+ const urgent=sources.filter(s=>['stale','zero','failed','partial'].includes(sourceAuditInfo(s).id)).length;
+ const content=`<div class="source-v30-intro"><b>Monitoraggio delle fonti Careers</b><p>Il sistema distingue <b>import completo</b>, <b>import parziale</b>, <b>fallimento</b> e <b>non ancora verificato</b>. Le esecuzioni precedenti rimangono indicate come non certificate finché non vengono ripetute.</p></div>
+ <div class="source-health-cards"><div><b>${sources.length}</b><span>Fonti configurate</span></div><div><b>${checked}</b><span>Con data registrata</span></div><div><b>${never}</b><span>Mai controllate</span></div><div><b>${urgent}</b><span>Fonti da verificare*</span></div></div>
  <div class="audit-controls source-v30-actions"><button class="btn primary" onclick="closeModal();startRefreshAll()">↻ Aggiorna tutte</button><button class="btn" onclick="exportCoverageCSV()">↓ Esporta report CSV</button><button class="btn" onclick="closeModal();go('companies');openCareerAudit()">Esamina aziende non collegate ↗</button></div>
- <div class="source-v30-filters"><select class="field" onchange="setCoverageScope(this.value)" aria-label="Filtra fonti per stato"><option value="all">Tutte le fonti</option><option value="never">Mai controllate</option><option value="stale">Controllo datato</option><option value="zero">Zero offerte</option><option value="recent">Esito da verificare</option><option value="passed">Import riuscito</option><option value="failed">Import fallito</option></select><input class="field" type="search" placeholder="Cerca una fonte…" oninput="setCoverageSearch(this.value)" aria-label="Cerca fonte Careers"><span id="coverage-filter-count" class="tiny muted"></span></div>
+ <div class="source-v30-filters"><select class="field" onchange="setCoverageScope(this.value)" aria-label="Filtra fonti per stato"><option value="all">Tutte le fonti</option><option value="never">Mai controllate</option><option value="stale">Controllo datato</option><option value="zero">Zero offerte</option><option value="recent">Esito da verificare</option><option value="passed">Import riuscito</option><option value="partial">Copertura incompleta</option><option value="failed">Import fallito</option></select><input class="field" type="search" placeholder="Cerca una fonte…" oninput="setCoverageSearch(this.value)" aria-label="Cerca fonte Careers"><span id="coverage-filter-count" class="tiny muted"></span></div>
  <div class="coverage-v30-list" id="coverage-list"></div>
  <p class="live-note">* Le categorie possono sovrapporsi. “Zero offerte” non dimostra un errore. Le date del database potrebbero essere in UTC. Per controllare errori effettivi: Cloudflare → career-radar-api → Observability → Logs.</p>`;
  openModal('Stato fonti Careers · Diagnostica',content,async()=>{await loadLive();closeModal()});
