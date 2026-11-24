@@ -283,7 +283,9 @@ async function getWorkdayJobs(spec,{probe=false,diagnostic=null}={}){
  const site=workdaySite(spec.careers);
  if(!site)return null;
  /** @type {Array<any> & {partial?:boolean,reportedTotal?:number}} */
- const jobs=[];const seen=new Set(),max=probe?20:300;
+ // The probe must cover the same range as the scheduled importer. A board with
+  // more than 20 jobs is not inherently incomplete.
+  const jobs=[];const seen=new Set(),max=300;
  let total=0;
  for(let offset=0;offset<max;offset+=20){
   try{
@@ -358,15 +360,17 @@ async function getRecruiteeJobs(spec){
   }catch(e){console.warn('Recruitee feed unavailable',slug,String(e));return null}
 }
 
-async function getPhenomJobs(spec,{probe=false}={}){
+async function getPhenomJobs(spec,{probe=false,diagnostic=null}={}){
  if(spec.board!=='careers.cboe.com')return null;
- const jobs=[],seen=new Set(),cap=probe?100:300,size=50;let total=0;
+ // Cboe's public jobs page currently has >100 positions; probe and import
+  // must use the same cap to avoid falsely rejecting a complete source.
+  const jobs=[],seen=new Set(),cap=300,size=50;let total=0;
  for(let from=0;from<cap;from+=size){
   try{
    const r=await fetch('https://careers.cboe.com/widgets',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({ddoKey:'refineSearch',jobs:true,from,size,pageName:'search-results',sort:{order:'desc',field:'dateCreated'}}),signal:AbortSignal.timeout(12000),redirect:'error'});
-   if(!r.ok)throw Error('Phenom HTTP '+r.status);
+   if(!r.ok){if(diagnostic)diagnostic.error='HTTP '+r.status;throw Error('Phenom HTTP '+r.status)}
    const data=await r.json(),result=data?.refineSearch?.data;
-   if(!Array.isArray(result?.jobs))throw Error('Phenom payload non valido');
+   if(!Array.isArray(result?.jobs)){if(diagnostic)diagnostic.error='Formato JSON Phenom inatteso';throw Error('Phenom payload non valido')}
    if(from===0)total=Number(result.totalHits)||result.jobs.length;
    for(const item of result.jobs){
     const title=String(item.title||item.jobTitle||'').trim(),id=String(item.jobSeqNo||item.jobId||item.id||'').trim();
@@ -377,7 +381,7 @@ async function getPhenomJobs(spec,{probe=false}={}){
     jobs.push({id,title,absolute_url:link,location:{name:[item.location||'',item.country||''].filter(Boolean).join(', ')},content:[item.description||item.descriptionTeaser||'',item.category||'',item.department||''].filter(Boolean).join('\n\n')});
    }
    if(result.jobs.length<size||from+size>=total)break;
-  }catch(e){console.warn('Phenom source unavailable',spec.board,String(e));if(!jobs.length)return null;jobs.partial=true;break}
+  }catch(e){if(diagnostic&&!diagnostic.error)diagnostic.error=e?.name==='TimeoutError'?'Timeout dopo 12 secondi':'Connessione non riuscita ('+String(e?.name||'errore di rete').slice(0,50)+')';console.warn('Phenom source unavailable',spec.board,String(e));if(!jobs.length)return null;jobs.partial=true;break}
  }
  jobs.reportedTotal=total;jobs.partial=Boolean(jobs.partial||total>cap||jobs.length<total);
  return jobs;
@@ -691,7 +695,9 @@ function publicBoardSpec(raw){
   else if(/^([a-z0-9][a-z0-9-]{1,70})\.recruitee\.com$/.test(host)){ats='recruitee';board=host.split('.')[0];}
   else if(host==='careers.cboe.com'&&(/^\/us\/en\/(search-results|careers)\/?$/.test(u.pathname)||u.pathname==='/widgets')){ats='phenom';board='careers.cboe.com';}
   else if(workdaySite(raw)){const wd=workdaySite(raw);ats='workday';board=wd.tenant+'-'+wd.site;}
-  if(!ats||!/^[a-z0-9][a-z0-9_-]{1,140}$/i.test(board))return null;
+  // Phenom's reviewed identifier is a hostname containing dots. Never allow
+  // hostname-style identifiers for generic ATS boards.
+  if(!ats||(ats==='phenom'?board!=='careers.cboe.com':!/^[a-z0-9][a-z0-9_-]{1,140}$/i.test(board)))return null;
   return {ats,board,region:host.includes('.eu.')?'eu':'global',careers:ats==='phenom'?'https://careers.cboe.com/us/en/search-results':ats==='workday'?workdaySite(raw).careers:ats==='teamtailor'?'https://'+host+'/jobs':ats==='recruitee'?'https://'+host+'/':ats==='workable'?'https://apply.workable.com/'+board+'/':'https://'+host+'/'+board};
  }catch{return null;}
 }
@@ -699,11 +705,11 @@ async function probePublicBoard(url,origin,env){
  const raw=(url.searchParams.get('url')||'').trim();
  if(raw.length>250)return fail('URL troppo lungo',400,origin);
  const spec=publicBoardSpec(raw);
- if(!spec)return fail('Incolla un link Greenhouse, Lever, Ashby, SmartRecruiters, Teamtailor, Workday, Workable o Recruitee.',400,origin);
+ if(!spec)return fail('Inserisci una bacheca ATS compatibile: Greenhouse, Lever, Ashby, SmartRecruiters, Teamtailor, Workday, Workable, Recruitee o Phenom (Cboe).',400,origin);
  const diagnostic={};
- const jobs=spec.ats==='workday'?await getWorkdayJobs(spec,{probe:true,diagnostic}):await getATSJobs(spec,{probe:true});
+ const jobs=await getATSJobs(spec,{probe:true,diagnostic});
  if(!jobs){
-  const reason=spec.ats==='workday'&&diagnostic.error?' Diagnostica Workday: '+diagnostic.error+'.':'';
+  const reason=(spec.ats==='workday'||spec.ats==='phenom')&&diagnostic.error?' Diagnostica '+(spec.ats==='workday'?'Workday':'Phenom')+': '+diagnostic.error+'.':'';
   return fail('Bacheca riconosciuta ma feed non raggiungibile.'+reason+' Verifica il link o riprova.',502,origin);
  }
  const valid=jobs.filter(j=>validURL(j.absolute_url)&&String(j.title||'').trim());
