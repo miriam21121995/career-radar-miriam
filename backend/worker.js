@@ -297,7 +297,7 @@ const LSEG_ISO_BY_NAME=(()=>{
  const normalize=x=>String(x||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('en').replace(/[^a-z0-9]+/g,' ').trim();
  for(let a=65;a<=90;a++)for(let b=65;b<=90;b++){
   const code=String.fromCharCode(a,b),name=display.of(code);
-  if(name!==code)map.set(normalize(name),code);
+  if(name!==code){const key=normalize(name);if(!map.has(key)||LSEG_EMEA_CODES.has(code))map.set(key,code)}
  }
  return map;
 })();
