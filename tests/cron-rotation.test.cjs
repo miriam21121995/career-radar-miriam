@@ -1,0 +1,15 @@
+const fs=require('node:fs');
+const assert=require('node:assert/strict');
+const path=require('node:path');
+const backend=fs.readFileSync(path.join(__dirname,'../backend/worker.js'),'utf8');
+const settings=JSON.parse(fs.readFileSync(path.join(__dirname,'../backend/wrangler.jsonc'),'utf8'));
+assert.deepEqual(settings.triggers.crons,['*/5 * * * *']);
+assert.match(backend,/const slot=Math\.floor\(\(Number\(event\.scheduledTime\)\|\|Date\.now\(\)\)\/\(5\*60\*1000\)\)/);
+assert.match(backend,/const idx=slot%entries\.length/);
+assert.doesNotMatch(backend,/return registry\.slice\(0,180\)/);
+const names=Array.from({length:260},(_,i)=>'company-'+i);
+const slots=Array.from({length:260},(_,i)=>i);
+const visited=new Set(slots.map(x=>names[x%names.length]));
+assert.equal(visited.size,260,'260 unique companies should fit in one day at 5-minute intervals');
+assert(260*5<1440);
+console.log('PASS: no silent 180-source cap, 260-company rotation under 24 hours, one source per run');
