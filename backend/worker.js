@@ -735,6 +735,16 @@ function publicBoardSpec(raw){
   return {ats,board,region:host.includes('.eu.')?'eu':'global',careers:ats==='phenom'?'https://careers.cboe.com/us/en/search-results':ats==='workday'?workdaySite(raw).careers:ats==='teamtailor'?'https://'+host+'/jobs':ats==='recruitee'?'https://'+host+'/':ats==='workable'?'https://apply.workable.com/'+board+'/':'https://'+host+'/'+board};
  }catch{return null;}
 }
+// Optional read-only location comparison for diagnosing multi-office boards.
+function probeCityJobs(jobs,rawCity){
+ const city=String(rawCity||'').trim();
+ if(!city||city.length>60)return null;
+ const key=city.toLocaleLowerCase();
+ const matching=jobs.filter(j=>String(j.location?.name||'').toLocaleLowerCase().includes(key));
+ return {city,total:matching.length,roles:matching.slice(0,15).map(j=>({
+  title:j.title,location:j.location?.name||'',url:j.absolute_url
+ }))};
+}
 async function probePublicBoard(url,origin,env){
  const raw=(url.searchParams.get('url')||'').trim();
  if(raw.length>250)return fail('URL troppo lungo',400,origin);
@@ -748,7 +758,7 @@ async function probePublicBoard(url,origin,env){
  }
  const valid=jobs.filter(j=>validURL(j.absolute_url)&&String(j.title||'').trim());
  return json({ok:true,ats:spec.ats,board:spec.board,careers:spec.careers,
-   total:jobs.reportedTotal||valid.length,partial:Boolean(jobs.partial),locationCoverageIncomplete:Boolean(jobs.locationCoverageIncomplete),sample:valid.slice(0,3).map(j=>({title:j.title,location:j.location?.name||''})),
+   total:jobs.reportedTotal||valid.length,partial:Boolean(jobs.partial),locationCoverageIncomplete:Boolean(jobs.locationCoverageIncomplete),cityMatch:probeCityJobs(valid,url.searchParams.get('city')),sample:valid.slice(0,3).map(j=>({title:j.title,location:j.location?.name||''})),
    monitored:(await monitoredSources(env)).some(([id,s])=>s.ats===spec.ats&&s.board.toLowerCase()===spec.board.toLowerCase()),note:'Feed pubblico verificato. Una nuova fonte va approvata nel database D1 Cloudflare prima del monitoraggio automatico.'},200,origin);
 }
 
