@@ -1314,7 +1314,7 @@ async function manualSourceV44Probe(){
    const resp=await fetch(API_BASE+'/api/ats-probe?url='+encodeURIComponent(candidate?.url||url.href),{cache:'no-store',signal:AbortSignal.timeout(30000)});
   const result=await resp.json();
   if(!resp.ok||!result.ok)throw Error((candidate?'Il candidato Greenhouse non è ancora confermato: ':'')+(result.message||'Feed non raggiungibile'));
-   if(result.partial)throw Error('Feed parziale ('+result.total+' annunci): non attivarlo prima di risolvere la copertura.');
+   if(result.partial)throw Error(result.importLimit?'Bacheca Workday con '+result.total+' annunci, superiore al limite attuale di importazione ('+result.importLimit+'). Non attivarla: monitoraggio incompleto.':'Feed parziale ('+result.total+' annunci): non attivarlo prima di risolvere la copertura.');
   const existing=careerSources.find(s=>nameKey(s.name)===nameKey(name));
   if(result.monitored){out.innerHTML=`<div class="mini-verify"><b>✓ La bacheca è già monitorata.</b><p>${esc(result.ats)} · ${Number(result.total)||0} offerte rilevate. Non serve attivarla nuovamente.</p></div>`;return}
   if(existing){out.innerHTML=`<div class="mini-verify"><b>Attenzione: l'azienda risulta già monitorata.</b><p>Fonte esistente: ${esc(existing.careers||'Non disponibile')}. Non attivo un secondo feed senza verificarne la corrispondenza.</p></div>`;return}
@@ -1554,7 +1554,7 @@ async function verifyAuditQuickAdd(){
     const r=await fetch(API_BASE+'/api/ats-probe?url='+encodeURIComponent(parsed.url),{cache:'no-store',signal:AbortSignal.timeout(25000)});
     const result=await r.json();
     if(!r.ok||!result.ok||result.ats!==parsed.ats||result.board.toLowerCase()!==parsed.board.toLowerCase())throw Error(result.message||'Feed non valido');
-    if(result.partial)throw Error('Feed parziale ('+result.total+' annunci): attivazione sospesa per evitare perdite.');
+    if(result.partial)throw Error(result.importLimit?'Bacheca Workday con '+result.total+' annunci, superiore al limite di importazione ('+result.importLimit+'). Attivazione sospesa: serve un connettore per grandi volumi.':'Feed parziale ('+result.total+' annunci): attivazione sospesa per evitare perdite.');
     const current=data.companies.find(x=>String(x.id)===String(auditQuickCompanyId));
     if(!current)throw Error('Azienda non trovata');
     current.careers_url=result.careers||parsed.url;
@@ -1562,7 +1562,10 @@ async function verifyAuditQuickAdd(){
     data.careerAudit[nameKey(current.name)]={url:current.careers_url,ats:parsed.ats,board:parsed.board,verified:true,found:result.total,checkedAt:new Date().toISOString()};
     save();renderCareerAudit();
     message.textContent='✓ Feed verificato ('+result.total+' offerte). Salvato localmente. '+(result.monitored?'È già monitorato.':'Ora puoi approvarne l’attivazione dall’audit; il link ufficiale resta consultabile.');
-  }catch(e){message.textContent='Verifica non riuscita: '+String(e.message||e)+'. Non è stato salvato nulla.';}
+  }catch(e){
+     const networkError=e?.name==='TimeoutError'||e?.name==='AbortError'?'La verifica ha superato il tempo massimo.':/Failed to fetch/i.test(String(e?.message||''))?'Il browser non riesce a comunicare con l’API (rete, CORS oppure servizio non disponibile).':String(e.message||e);
+     message.textContent='Verifica non riuscita: '+networkError+' Non è stato salvato nulla.';
+   }
   finally{btn.disabled=false;}
 }
 async function verifyAuditCandidates(){
