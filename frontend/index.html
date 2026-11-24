@@ -1091,6 +1091,7 @@ function atsBoardFromURL(value){
     if(host==='jobs.ashbyhq.com')return {ats:'ashby',board:piece,url:'https://'+host+'/'+piece};
     if(host==='careers.smartrecruiters.com'||host==='jobs.smartrecruiters.com')return {ats:'smartrecruiters',board:piece,url:'https://careers.smartrecruiters.com/'+piece};
     if(/^([a-z0-9][a-z0-9-]{1,70})\.teamtailor\.com$/.test(host))return {ats:'teamtailor',board:host.split('.')[0],url:'https://'+host+'/jobs'};
+    if(host==='careers.cboe.com'&&(/^\/us\/en\/(search-results|careers)\/?$/.test(u.pathname)||u.pathname==='/widgets'))return {ats:'phenom',board:'careers.cboe.com',url:'https://careers.cboe.com/us/en/search-results'};
     if(host==='apply.workable.com'&&piece)return {ats:'workable',board:piece,url:'https://apply.workable.com/'+piece+'/'};
     if(/^([a-z0-9][a-z0-9-]{1,70})\.recruitee\.com$/.test(host))return {ats:'recruitee',board:host.split('.')[0],url:'https://'+host+'/'};
     if(/^([a-z0-9][a-z0-9-]{1,62})\.wd[0-9]{1,3}\.myworkdayjobs\.com$/.test(host)){
@@ -1313,6 +1314,7 @@ async function manualSourceV44Probe(){
    const resp=await fetch(API_BASE+'/api/ats-probe?url='+encodeURIComponent(candidate?.url||url.href),{cache:'no-store',signal:AbortSignal.timeout(30000)});
   const result=await resp.json();
   if(!resp.ok||!result.ok)throw Error((candidate?'Il candidato Greenhouse non è ancora confermato: ':'')+(result.message||'Feed non raggiungibile'));
+   if(result.partial)throw Error('Feed parziale ('+result.total+' annunci): non attivarlo prima di risolvere la copertura.');
   const existing=careerSources.find(s=>nameKey(s.name)===nameKey(name));
   if(result.monitored){out.innerHTML=`<div class="mini-verify"><b>✓ La bacheca è già monitorata.</b><p>${esc(result.ats)} · ${Number(result.total)||0} offerte rilevate. Non serve attivarla nuovamente.</p></div>`;return}
   if(existing){out.innerHTML=`<div class="mini-verify"><b>Attenzione: l'azienda risulta già monitorata.</b><p>Fonte esistente: ${esc(existing.careers||'Non disponibile')}. Non attivo un secondo feed senza verificarne la corrispondenza.</p></div>`;return}
@@ -1552,6 +1554,7 @@ async function verifyAuditQuickAdd(){
     const r=await fetch(API_BASE+'/api/ats-probe?url='+encodeURIComponent(parsed.url),{cache:'no-store',signal:AbortSignal.timeout(25000)});
     const result=await r.json();
     if(!r.ok||!result.ok||result.ats!==parsed.ats||result.board.toLowerCase()!==parsed.board.toLowerCase())throw Error(result.message||'Feed non valido');
+    if(result.partial)throw Error('Feed parziale ('+result.total+' annunci): attivazione sospesa per evitare perdite.');
     const current=data.companies.find(x=>String(x.id)===String(auditQuickCompanyId));
     if(!current)throw Error('Azienda non trovata');
     current.careers_url=result.careers||parsed.url;

@@ -279,11 +279,11 @@ function workdaySite(raw){
   return {host,tenant,site,careers:'https://'+host+'/'+site};
  }catch{return null}
 }
-async function getWorkdayJobs(spec,{probe=false}={}){
+async function getWorkdayJobs(spec,{probe=false,diagnostic=null}={}){
  const site=workdaySite(spec.careers);
  if(!site)return null;
  /** @type {Array<any> & {partial?:boolean,reportedTotal?:number}} */
- const jobs=[];const seen=new Set(),max=probe?20:100;
+ const jobs=[];const seen=new Set(),max=probe?20:300;
  let total=0;
  for(let offset=0;offset<max;offset+=20){
   try{
@@ -291,9 +291,12 @@ async function getWorkdayJobs(spec,{probe=false}={}){
     method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},
     body:JSON.stringify({appliedFacets:{},limit:20,offset,searchText:''}),
     signal:AbortSignal.timeout(12000),redirect:'error'});
-   if(!response.ok)throw Error('Workday HTTP '+response.status);
+   if(!response.ok){
+      if(diagnostic)diagnostic.error='HTTP '+response.status+(response.headers.get('cf-mitigated')==='challenge'?' (verifica anti-bot)':'');
+      throw Error('Workday HTTP '+response.status);
+    }
    const data=await response.json();
-   if(!Array.isArray(data.jobPostings))throw Error('Workday payload non valido');
+   if(!Array.isArray(data.jobPostings)){if(diagnostic)diagnostic.error='Formato JSON Workday inatteso';throw Error('Workday payload non valido')}
    if(offset===0)total=Number(data.total)||data.jobPostings.length;
    for(const x of data.jobPostings){
     const path=String(x.externalPath||'');
@@ -308,7 +311,9 @@ async function getWorkdayJobs(spec,{probe=false}={}){
    if(data.jobPostings.length<20||offset+20>=total)break;
   }catch(e){
    // A partial Workday snapshot is not a full picture. Keep previously imported rows.
-   if(!jobs.length){console.warn('Workday feed unavailable',site.host,site.site,String(e));return null}
+   if(!jobs.length){
+      if(diagnostic&&!diagnostic.error)diagnostic.error=String(e?.name)==='TimeoutError'?'Timeout dopo 12 secondi':'Connessione non riuscita ('+String(e?.name||'errore di rete').slice(0,50)+')';
+      console.warn('Workday feed unavailable',site.host,site.site,String(e));return null}
    jobs.partial=true;break;
   }
  }
@@ -352,7 +357,33 @@ async function getRecruiteeJobs(spec){
     })).filter(j=>j.title&&validURL(j.absolute_url));
   }catch(e){console.warn('Recruitee feed unavailable',slug,String(e));return null}
 }
+
+async function getPhenomJobs(spec,{probe=false}={}){
+ if(spec.board!=='careers.cboe.com')return null;
+ const jobs=[],seen=new Set(),cap=probe?100:300,size=50;let total=0;
+ for(let from=0;from<cap;from+=size){
+  try{
+   const r=await fetch('https://careers.cboe.com/widgets',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({ddoKey:'refineSearch',jobs:true,from,size,pageName:'search-results',sort:{order:'desc',field:'dateCreated'}}),signal:AbortSignal.timeout(12000),redirect:'error'});
+   if(!r.ok)throw Error('Phenom HTTP '+r.status);
+   const data=await r.json(),result=data?.refineSearch?.data;
+   if(!Array.isArray(result?.jobs))throw Error('Phenom payload non valido');
+   if(from===0)total=Number(result.totalHits)||result.jobs.length;
+   for(const item of result.jobs){
+    const title=String(item.title||item.jobTitle||'').trim(),id=String(item.jobSeqNo||item.jobId||item.id||'').trim();
+    if(!title||!id)continue;
+    const parts=String(item.locale||'en_US').split('_'),lang=/^[a-z]{2}$/i.test(parts[0]||'')?parts[0].toLowerCase():'en',country=/^[a-z]{2}$/i.test(parts[1]||'')?parts[1].toLowerCase():'us';
+    const link='https://careers.cboe.com/'+country+'/'+lang+'/job/'+encodeURIComponent(id);
+    if(seen.has(link))continue;seen.add(link);
+    jobs.push({id,title,absolute_url:link,location:{name:[item.location||'',item.country||''].filter(Boolean).join(', ')},content:[item.description||item.descriptionTeaser||'',item.category||'',item.department||''].filter(Boolean).join('\n\n')});
+   }
+   if(result.jobs.length<size||from+size>=total)break;
+  }catch(e){console.warn('Phenom source unavailable',spec.board,String(e));if(!jobs.length)return null;jobs.partial=true;break}
+ }
+ jobs.reportedTotal=total;jobs.partial=Boolean(jobs.partial||total>cap||jobs.length<total);
+ return jobs;
+}
 async function getATSJobs(spec,options={}) {
+  if (spec.ats === 'phenom') return await getPhenomJobs(spec,options);
   if (spec.ats === 'workable') return await getWorkableJobs(spec);
   if (spec.ats === 'recruitee') return await getRecruiteeJobs(spec);
   if (spec.ats === 'workday') return await getWorkdayJobs(spec,options);
@@ -411,7 +442,7 @@ async function monitoredSources(env){
   if(!env.DB)return registry;
   const rows=await env.DB.prepare(`SELECT name,sector,location,website_url,careers_url,source_type
     FROM companies WHERE monitoring_status='active'
-      AND source_type IN ('greenhouse','lever','ashby','smartrecruiters','teamtailor','workday','workable','recruitee') AND careers_url IS NOT NULL`).all();
+      AND source_type IN ('greenhouse','lever','ashby','smartrecruiters','teamtailor','workday','workable','recruitee','phenom') AND careers_url IS NOT NULL`).all();
   for(const row of rows.results||[]){
     const validated=publicBoardSpec(row.careers_url);
     if(!validated||validated.ats!==row.source_type)continue;
@@ -658,9 +689,10 @@ function publicBoardSpec(raw){
   else if(/^([a-z0-9][a-z0-9-]{1,70})\.teamtailor\.com$/.test(host)){ats='teamtailor';board=host.split('.')[0];}
   else if(host==='apply.workable.com'){ats='workable';board=parts[0]||'';}
   else if(/^([a-z0-9][a-z0-9-]{1,70})\.recruitee\.com$/.test(host)){ats='recruitee';board=host.split('.')[0];}
+  else if(host==='careers.cboe.com'&&(/^\/us\/en\/(search-results|careers)\/?$/.test(u.pathname)||u.pathname==='/widgets')){ats='phenom';board='careers.cboe.com';}
   else if(workdaySite(raw)){const wd=workdaySite(raw);ats='workday';board=wd.tenant+'-'+wd.site;}
   if(!ats||!/^[a-z0-9][a-z0-9_-]{1,140}$/i.test(board))return null;
-  return {ats,board,region:host.includes('.eu.')?'eu':'global',careers:ats==='workday'?workdaySite(raw).careers:ats==='teamtailor'?'https://'+host+'/jobs':ats==='recruitee'?'https://'+host+'/':ats==='workable'?'https://apply.workable.com/'+board+'/':'https://'+host+'/'+board};
+  return {ats,board,region:host.includes('.eu.')?'eu':'global',careers:ats==='phenom'?'https://careers.cboe.com/us/en/search-results':ats==='workday'?workdaySite(raw).careers:ats==='teamtailor'?'https://'+host+'/jobs':ats==='recruitee'?'https://'+host+'/':ats==='workable'?'https://apply.workable.com/'+board+'/':'https://'+host+'/'+board};
  }catch{return null;}
 }
 async function probePublicBoard(url,origin,env){
@@ -668,8 +700,12 @@ async function probePublicBoard(url,origin,env){
  if(raw.length>250)return fail('URL troppo lungo',400,origin);
  const spec=publicBoardSpec(raw);
  if(!spec)return fail('Incolla un link Greenhouse, Lever, Ashby, SmartRecruiters, Teamtailor, Workday, Workable o Recruitee.',400,origin);
- const jobs=await getATSJobs(spec,{probe:true});
- if(!jobs)return fail('Bacheca riconosciuta ma feed non raggiungibile. Verifica il link o riprova.',502,origin);
+ const diagnostic={};
+ const jobs=spec.ats==='workday'?await getWorkdayJobs(spec,{probe:true,diagnostic}):await getATSJobs(spec,{probe:true});
+ if(!jobs){
+  const reason=spec.ats==='workday'&&diagnostic.error?' Diagnostica Workday: '+diagnostic.error+'.':'';
+  return fail('Bacheca riconosciuta ma feed non raggiungibile.'+reason+' Verifica il link o riprova.',502,origin);
+ }
  const valid=jobs.filter(j=>validURL(j.absolute_url)&&String(j.title||'').trim());
  return json({ok:true,ats:spec.ats,board:spec.board,careers:spec.careers,
    total:jobs.reportedTotal||valid.length,partial:Boolean(jobs.partial),sample:valid.slice(0,3).map(j=>({title:j.title,location:j.location?.name||''})),
@@ -806,6 +842,7 @@ async function activateReviewedSources(request,env,origin){
       if(!response){errors.push({name,reason:'Feed non disponibile al momento'});continue}
       const usable=response.filter(j=>validURL(j.absolute_url)&&String(j.title||'').trim());
       if(!usable.length){errors.push({name,reason:'Feed senza annunci: attivazione rinviata'});continue}
+      if(response.partial){errors.push({name,reason:'Feed parziale: attivazione sospesa per evitare perdita di annunci'});continue}
       // A board is a unique source. Never silently associate it with a second company.
       const sourceInDb=await env.DB.prepare(`SELECT name FROM companies WHERE source_type=? AND careers_url=? AND name<>? LIMIT 1`).bind(board.ats,board.careers,name).first();
       if(sourceInDb){errors.push({name,reason:'Bacheca già assegnata a '+String(sourceInDb.name).slice(0,80)});continue}
