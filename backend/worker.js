@@ -618,7 +618,8 @@ async function monitoredSources(env){
   if(!env.DB)return registry;
   const rows=await env.DB.prepare(`SELECT name,sector,location,website_url,careers_url,source_type
     FROM companies WHERE monitoring_status='active'
-      AND source_type IN ('greenhouse','lever','ashby','smartrecruiters','teamtailor','workday','workable','recruitee','phenom') AND careers_url IS NOT NULL`).all();
+      AND source_type IN ('greenhouse','lever','ashby','smartrecruiters','teamtailor','workday','workable','recruitee','phenom') AND careers_url IS NOT NULL
+     ORDER BY LOWER(name), name`).all();
   for(const row of rows.results||[]){
     const validated=publicBoardSpec(row.careers_url);
     if(!validated||validated.ats!==row.source_type)continue;
@@ -815,7 +816,7 @@ async function runScheduledSource(env, scheduledTime, sourceIndex=null, supplied
       await db.batch(statements);
     }
     if(jobs.length>0&&!payload.partial) await markMissingClosed(db,company.id,jobs);
-    const qualityPartial=Boolean(payload.partial||payload.locationCoverageIncomplete);
+    const qualityPartial=Boolean(payload.partial||payload.locationCoverageIncomplete||(Number(payload.reportedTotal)>jobs.length));
     await db.prepare(`UPDATE refresh_runs SET status=?,completed_at=CURRENT_TIMESTAMP,
       companies_checked=1,jobs_found=?,jobs_new=? WHERE id=?`).bind(qualityPartial?'partial':'success',jobs.length,inserted,runId).run();
     console.log('Scheduled source refreshed',slug,jobs.length,inserted,qualityPartial?'partial':'complete');
