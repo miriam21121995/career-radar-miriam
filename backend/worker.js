@@ -288,9 +288,113 @@ function workdayLocationLabel(v){
  if(v&&typeof v==='object')return String(v.descriptor||v.name||v.location||'').trim();
  return '';
 }
+// LSEG's global Workday board has hundreds of jobs. Apply the verified country
+// facet BEFORE paging; never filter only the first N global jobs.
+const LSEG_EMEA_CODES=new Set(('AD AE AL AM AO AT AZ BA BE BF BG BH BI BJ BW BY CD CF CG CH CI CM CV CY CZ DE DJ DK DZ EE EG ER ES ET FI FO FR GA GB GE GG GH GI GM GN GQ GR GW HR HU IE IL IM IQ IR IS IT JE JO KE KM KW LB LI LR LS LT LU LV LY MA MC MD ME MG MK ML MR MT MU MW MZ NA NE NG NL NO OM PL PS PT QA RE RO RS RU RW SA SC SD SE SH SI SJ SK SL SM SN SO SS ST SY SZ TD TG TN TR TZ UA UG VA XK YE YT ZA ZM ZW KZ').split(' '));
+// Build this lookup only once per Worker isolate to stay inside Free CPU quotas.
+const LSEG_ISO_BY_NAME=(()=>{
+ const map=new Map(),display=new Intl.DisplayNames(['en'],{type:'region'});
+ const normalize=x=>String(x||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('en').replace(/[^a-z0-9]+/g,' ').trim();
+ for(let a=65;a<=90;a++)for(let b=65;b<=90;b++){
+  const code=String.fromCharCode(a,b),name=display.of(code);
+  if(name!==code){const key=normalize(name);if(!map.has(key)||LSEG_EMEA_CODES.has(code))map.set(key,code)}
+ }
+ return map;
+})();
+function lsegCountryCode(raw){
+ const normalize=x=>String(x||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('en').replace(/[^a-z0-9]+/g,' ').trim();
+ const value=normalize(raw);if(!value)return null;
+ const exceptions={
+  'united states of america':'US','usa':'US','u s a':'US','u s':'US',
+  'united kingdom of great britain and northern ireland':'GB','great britain':'GB','uk':'GB',
+  'czech republic':'CZ','turkey':'TR','republic of turkiye':'TR','uae':'AE',
+  'south korea':'KR','republic of korea':'KR','north korea':'KP',
+  'russia':'RU','russian federation':'RU','ivory coast':'CI','cape verde':'CV',
+  'viet nam':'VN','taiwan':'TW','moldova':'MD','republic of moldova':'MD',
+  'tanzania':'TZ','bolivia':'BO','venezuela':'VE','brunei':'BN','laos':'LA',
+  'hong kong sar':'HK','macao sar':'MO','macau':'MO','palestinian territories':'PS',
+  'netherlands the':'NL','the netherlands':'NL','sri lanka':'LK','kosovo':'XK',
+  'democratic republic of congo':'CD','dr congo':'CD','congo brazzaville':'CG',
+  'eswatini':'SZ','swaziland':'SZ','north macedonia':'MK','reunion':'RE'
+ };
+ if(exceptions[value])return exceptions[value];
+ if(/^[a-z]{2}$/.test(value))return value.toUpperCase();
+ return LSEG_ISO_BY_NAME.get(value)||null;
+}
+async function getLsegEmeaJobs(site,{probe=false,diagnostic=null}={}){
+ const url='https://'+site.host+'/wday/cxs/'+encodeURIComponent(site.tenant)+'/'+encodeURIComponent(site.site)+'/jobs';
+ const page=async(appliedFacets,offset)=>{
+  const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},
+   body:JSON.stringify({appliedFacets,limit:20,offset,searchText:''}),
+   signal:AbortSignal.timeout(12000),redirect:'manual'});
+  if(!res.ok)throw Error('Workday HTTP '+res.status);
+  const data=await res.json();
+  if(!Array.isArray(data.jobPostings))throw Error('Formato JSON Workday inatteso');
+  return data;
+ };
+ try{
+  const first=await page({},0),globalTotal=Number(first.total)||first.jobPostings.length;
+  // Prefer site-declared country facets; names/UUIDs vary by Workday tenant.
+  const facet=(Array.isArray(first.facets)?first.facets:[]).find(f=>
+   /country/i.test(String(f.facetParameter||''))&&Array.isArray(f.values)&&f.values.length>0);
+  if(!facet){
+   if(diagnostic)diagnostic.error='LSEG: filtro Paese Workday non disponibile; nessun annuncio importato per evitare copertura parziale';
+   return null;
+  }
+  const selected=[],unknown=[];
+  for(const v of facet.values){
+   const label=String(v.descriptor||v.name||v.label||'').trim();
+   const code=lsegCountryCode(label);
+   if(!code){unknown.push(label.slice(0,90));continue}
+   if(LSEG_EMEA_CODES.has(code)&&typeof v.id==='string'&&v.id.length<=120)selected.push({id:v.id,country:label});
+  }
+  const facetHasMore=Number(facet.totalValues||facet.totalValueCount||facet.valuesTotal||0)>facet.values.length;
+  if(!selected.length||unknown.length||facetHasMore){
+   if(diagnostic)diagnostic.error='LSEG: filtro geografico incompleto ('+
+     (unknown.length?'Paesi non classificati: '+unknown.slice(0,5).join(', '):'')+
+     (facetHasMore?' ulteriori Paesi non elencati':'')+'). Monitoraggio sospeso';
+   return null;
+  }
+  const appliedFacets={[facet.facetParameter]:selected.map(x=>x.id)};
+  const jobs=[],seen=new Set(),max=300;let total=0;
+  for(let offset=0;offset<max;offset+=20){
+   let data;
+   try{data=await page(appliedFacets,offset)}
+   catch(e){if(!jobs.length)throw e;jobs.partial=true;break}
+   if(offset===0){
+    total=Number(data.total)||data.jobPostings.length;
+    // Some Workday tenants silently ignore unknown facet keys.
+    if(total>=globalTotal&&globalTotal>selected.length){
+     if(diagnostic)diagnostic.error='LSEG: filtro geografico non applicato dal server';
+     return null;
+    }
+   }
+   for(const item of data.jobPostings){
+    const path=String(item.externalPath||'');
+    if(!path.startsWith('/job/')||path.startsWith('//')||path.length>600||!String(item.title||'').trim())continue;
+    const canonical='https://'+site.host+'/'+encodeURIComponent(site.site)+path;
+    if(seen.has(canonical))continue;seen.add(canonical);
+    jobs.push({id:path.split('/').pop()||path,title:String(item.title).trim(),
+     location:{name:String(item.locationsText||'')},absolute_url:canonical,
+     content:[item.bulletFields?.join(' · ')||'',item.remoteType||''].filter(Boolean).join('\n')});
+   }
+   if(probe&&total>max){jobs.partial=true;jobs.probeLimitExceeded=max;break}
+   if(data.jobPostings.length<20||offset+20>=total)break;
+  }
+  jobs.partial=Boolean(jobs.partial||total>max||jobs.length<total);
+  jobs.reportedTotal=total;jobs.globalTotal=globalTotal;jobs.scope='EMEA';
+  jobs.scopeCountries=selected.map(x=>x.country);
+  return jobs;
+ }catch(e){
+  if(diagnostic&&!diagnostic.error)diagnostic.error=String(e?.name)==='TimeoutError'?'Timeout nella verifica EMEA':String(e?.message||e).slice(0,100);
+  console.warn('LSEG EMEA country-scoped feed unavailable',String(e));
+  return null;
+ }
+}
 async function getWorkdayJobs(spec,{probe=false,diagnostic=null}={}){
  const site=workdaySite(spec.careers);
  if(!site)return null;
+ if(site.tenant.toLowerCase()==='lseg'&&site.site.toLowerCase()==='careers')return getLsegEmeaJobs(site,{probe,diagnostic});
  /** @type {Array<any> & {partial?:boolean,reportedTotal?:number}} */
  // The probe must cover the same range as the scheduled importer. A board with
   // more than 20 jobs is not inherently incomplete.
@@ -762,7 +866,7 @@ async function probePublicBoard(url,origin,env){
  }
  const valid=jobs.filter(j=>validURL(j.absolute_url)&&String(j.title||'').trim());
  return json({ok:true,ats:spec.ats,board:spec.board,careers:spec.careers,
-   total:jobs.reportedTotal||valid.length,partial:Boolean(jobs.partial),importLimit:jobs.probeLimitExceeded||null,locationCoverageIncomplete:Boolean(jobs.locationCoverageIncomplete),cityMatch:probeCityJobs(valid,url.searchParams.get('city')),sample:valid.slice(0,3).map(j=>({title:j.title,location:j.location?.name||''})),
+   total:jobs.reportedTotal||valid.length,partial:Boolean(jobs.partial),importLimit:jobs.probeLimitExceeded||null,scope:jobs.scope||'Global',globalTotal:jobs.globalTotal||null,scopeCountries:jobs.scopeCountries||null,locationCoverageIncomplete:Boolean(jobs.locationCoverageIncomplete),cityMatch:probeCityJobs(valid,url.searchParams.get('city')),sample:valid.slice(0,3).map(j=>({title:j.title,location:j.location?.name||''})),
    monitored:(await monitoredSources(env)).some(([id,s])=>s.ats===spec.ats&&s.board.toLowerCase()===spec.board.toLowerCase()),note:'Feed pubblico verificato. Una nuova fonte va approvata nel database D1 Cloudflare prima del monitoraggio automatico.'},200,origin);
 }
 
