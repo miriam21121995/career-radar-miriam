@@ -247,7 +247,7 @@ async function getTeamtailorJobs(spec){
     for(let offset=0;offset<600;offset+=200){
       const endpoint=`https://${host}/jobs.rss?per_page=200&offset=${offset}`;
       try{
-        const r=await fetch(endpoint,{headers:{Accept:'application/rss+xml, application/xml, text/xml'},signal:AbortSignal.timeout(12000),redirect:'error'});
+        const r=await fetch(endpoint,{headers:{Accept:'application/rss+xml, application/xml, text/xml'},signal:AbortSignal.timeout(12000),redirect:'manual'});
         if(!r.ok)throw Error('Teamtailor HTTP '+r.status);
         const xml=await r.text();
         if(xml.length>3000000)throw Error('RSS troppo grande');
@@ -263,6 +263,9 @@ async function getTeamtailorJobs(spec){
   return null;
 }
 
+// Cloudflare Workers throws a TypeError for the unsupported 'error' redirect mode.
+// Use manual redirect handling so ATS requests stay on reviewed hosts;
+// HTTP 3xx responses fail the existing !response.ok checks.
 // V22: optional read-only Workday CXS connector. A Workday careers URL must be supplied
 // explicitly and reviewed; the tenant / site are never guessed from a company name.
 // Workday is an undocumented endpoint. Failures must not close previously indexed jobs.
@@ -292,7 +295,7 @@ async function getWorkdayJobs(spec,{probe=false,diagnostic=null}={}){
    const response=await fetch(`https://${site.host}/wday/cxs/${encodeURIComponent(site.tenant)}/${encodeURIComponent(site.site)}/jobs`,{
     method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},
     body:JSON.stringify({appliedFacets:{},limit:20,offset,searchText:''}),
-    signal:AbortSignal.timeout(12000),redirect:'error'});
+    signal:AbortSignal.timeout(12000),redirect:'manual'});
    if(!response.ok){
       if(diagnostic)diagnostic.error='HTTP '+response.status+(response.headers.get('cf-mitigated')==='challenge'?' (verifica anti-bot)':'');
       throw Error('Workday HTTP '+response.status);
@@ -348,7 +351,7 @@ async function getRecruiteeJobs(spec){
   if(!/^[a-z0-9][a-z0-9-]{1,70}$/i.test(slug))return null;
   try{
     const res=await fetch('https://'+slug+'.recruitee.com/api/offers/',{
-      headers:{Accept:'application/json'},signal:AbortSignal.timeout(16000),redirect:'error'});
+      headers:{Accept:'application/json'},signal:AbortSignal.timeout(16000),redirect:'manual'});
     if(!res.ok)throw Error('Recruitee HTTP '+res.status);
     const data=await res.json();if(!Array.isArray(data.offers))throw Error('Recruitee response non valida');
     return data.offers.map(j=>({
@@ -367,7 +370,7 @@ async function getPhenomJobs(spec,{probe=false,diagnostic=null}={}){
   const jobs=[],seen=new Set(),cap=300,size=50;let total=0;
  for(let from=0;from<cap;from+=size){
   try{
-   const r=await fetch('https://careers.cboe.com/widgets',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({ddoKey:'refineSearch',jobs:true,from,size,pageName:'search-results',sort:{order:'desc',field:'dateCreated'}}),signal:AbortSignal.timeout(12000),redirect:'error'});
+   const r=await fetch('https://careers.cboe.com/widgets',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({ddoKey:'refineSearch',jobs:true,from,size,pageName:'search-results',sort:{order:'desc',field:'dateCreated'}}),signal:AbortSignal.timeout(12000),redirect:'manual'});
    if(!r.ok){if(diagnostic)diagnostic.error='HTTP '+r.status;throw Error('Phenom HTTP '+r.status)}
    const data=await r.json(),result=data?.refineSearch?.data;
    if(!Array.isArray(result?.jobs)){if(diagnostic)diagnostic.error='Formato JSON Phenom inatteso';throw Error('Phenom payload non valido')}
