@@ -323,7 +323,11 @@ async function getWorkdayJobs(spec,{probe=false,diagnostic=null}={}){
      content:[x.bulletFields?.join(' · ')||'',x.remoteType||''].filter(Boolean).join('\n')});
     if(isCboe&&/\b(?:multiple|\d+)\s+locations?\b/i.test(listLocation))ambiguousLocations.push({index:jobs.length-1,path});
    }
-   if(data.jobPostings.length<20||offset+20>=total)break;
+   // A probe is read-only: avoid fetching hundreds of pages merely to confirm
+    // that a large board (e.g. LSEG) exceeds the current safe import cap.
+    // Never claim this board is complete or allow activation in that case.
+    if(probe&&total>max){jobs.partial=true;jobs.probeLimitExceeded=max;break}
+    if(data.jobPostings.length<20||offset+20>=total)break;
   }catch(e){
    // A partial Workday snapshot is not a full picture. Keep previously imported rows.
    if(!jobs.length){
@@ -758,7 +762,7 @@ async function probePublicBoard(url,origin,env){
  }
  const valid=jobs.filter(j=>validURL(j.absolute_url)&&String(j.title||'').trim());
  return json({ok:true,ats:spec.ats,board:spec.board,careers:spec.careers,
-   total:jobs.reportedTotal||valid.length,partial:Boolean(jobs.partial),locationCoverageIncomplete:Boolean(jobs.locationCoverageIncomplete),cityMatch:probeCityJobs(valid,url.searchParams.get('city')),sample:valid.slice(0,3).map(j=>({title:j.title,location:j.location?.name||''})),
+   total:jobs.reportedTotal||valid.length,partial:Boolean(jobs.partial),importLimit:jobs.probeLimitExceeded||null,locationCoverageIncomplete:Boolean(jobs.locationCoverageIncomplete),cityMatch:probeCityJobs(valid,url.searchParams.get('city')),sample:valid.slice(0,3).map(j=>({title:j.title,location:j.location?.name||''})),
    monitored:(await monitoredSources(env)).some(([id,s])=>s.ats===spec.ats&&s.board.toLowerCase()===spec.board.toLowerCase()),note:'Feed pubblico verificato. Una nuova fonte va approvata nel database D1 Cloudflare prima del monitoraggio automatico.'},200,origin);
 }
 
