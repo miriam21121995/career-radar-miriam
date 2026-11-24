@@ -1,0 +1,28 @@
+const fs=require('node:fs');
+const vm=require('node:vm');
+const assert=require('node:assert/strict');
+const source=fs.readFileSync(require('node:path').join(__dirname,'../backend/worker.js'),'utf8');
+const begin=source.indexOf('function publicBoardSpec(raw){');
+const end=source.indexOf('async function probePublicBoard(',begin);
+assert(begin>=0&&end>begin,'publicBoardSpec not found');
+const context={URL,workdaySite:raw=>{
+  const u=new URL(raw);
+  if(!/^hrhub\.wd3\.myworkdayjobs\.com$/.test(u.hostname))return null;
+  const p=u.pathname.split('/').filter(Boolean),site=p[p.length-1];
+  return {host:u.hostname,tenant:'hrhub',site,careers:'https://'+u.hostname+'/'+site};
+}};
+vm.createContext(context);
+vm.runInContext(source.slice(begin,end)+';globalThis.readBoard=publicBoardSpec;',context);
+const check=context.readBoard;
+const cboe=check('https://careers.cboe.com/us/en/search-results');
+assert.equal(cboe.ats,'phenom');
+assert.equal(cboe.board,'careers.cboe.com');
+assert.equal(cboe.careers,'https://careers.cboe.com/us/en/search-results');
+assert.equal(check('https://careers.cboe.com/us/en/careers').ats,'phenom');
+assert.equal(check('https://careers.cboe.com/widgets').ats,'phenom');
+assert.equal(check('https://careers.cboe.com.evil.com/us/en/search-results'),null);
+assert.equal(check('https://careers.cboe.com/us/en/anything'),null);
+assert.equal(check('https://job-boards.greenhouse.io/optiverus').ats,'greenhouse');
+assert.equal(check('https://hrhub.wd3.myworkdayjobs.com/en-US/Euronext_Career_Page').ats,'workday');
+assert.equal(check('http://careers.cboe.com/us/en/search-results'),null);
+console.log('PASS: Cboe Phenom exact allowlist and legacy ATS URLs');
