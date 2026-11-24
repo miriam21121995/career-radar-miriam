@@ -1319,8 +1319,8 @@ async function manualSourceV44Probe(){
   if(result.monitored){out.innerHTML=`<div class="mini-verify"><b>✓ La bacheca è già monitorata.</b><p>${esc(result.ats)} · ${Number(result.total)||0} offerte rilevate. Non serve attivarla nuovamente.</p></div>`;return}
   if(existing){out.innerHTML=`<div class="mini-verify"><b>Attenzione: l'azienda risulta già monitorata.</b><p>Fonte esistente: ${esc(existing.careers||'Non disponibile')}. Non attivo un secondo feed senza verificarne la corrispondenza.</p></div>`;return}
   const match=(data.companies||[]).find(c=>nameKey(c.name)===nameKey(name));
-  manualSourceV44Verified={name:match?.name||name,careers:result.careers,ats:result.ats,total:Number(result.total)||0,sector:match?.sector||'Da classificare',location:match?.location||'',website:(match?.url&&/^https:\/\//.test(match.url))?match.url:result.careers};
-  out.innerHTML=`<div class="mini-verify"><b>✓ Feed raggiungibile: ${esc(result.ats.toUpperCase())}</b><p><b>${esc(manualSourceV44Verified.name)}</b> · ${Number(result.total)||0} offerte rilevate${result.partial?' (risultato parziale)':''}.</p><p><a href="${esc(result.careers)}" target="_blank" rel="noopener noreferrer">Controlla che il portale appartenga davvero all'azienda ↗</a></p>${result.sample?.length?'<small>'+result.sample.map(x=>esc(x.title)).join(' · ')+'</small>':''}</div>`;
+  manualSourceV44Verified={name:match?.name||name,careers:result.careers,ats:result.ats,total:Number(result.total)||0,scope:result.scope||'Global',globalTotal:result.globalTotal||null,sector:match?.sector||'Da classificare',location:match?.location||'',website:(match?.url&&/^https:\/\//.test(match.url))?match.url:result.careers};
+  out.innerHTML=`<div class="mini-verify"><b>✓ Feed raggiungibile: ${esc(result.ats.toUpperCase())}</b><p><b>${esc(manualSourceV44Verified.name)}</b> · ${Number(result.total)||0} offerte ${result.scope==='EMEA'?'EMEA ('+Number(result.globalTotal||0)+' annunci globali)':'rilevate'}${result.partial?' (risultato parziale)':''}.</p><p><a href="${esc(result.careers)}" target="_blank" rel="noopener noreferrer">Controlla che il portale appartenga davvero all'azienda ↗</a></p>${result.sample?.length?'<small>'+result.sample.map(x=>esc(x.title)).join(' · ')+'</small>':''}</div>`;
   if(auth)auth.hidden=false;
  }catch(e){out.textContent='Verifica non riuscita: '+String(e.message||e)+'. Il link potrebbe non essere una bacheca compatibile o il feed potrebbe essere temporaneamente indisponibile.'}
  finally{btn.disabled=false}
@@ -1561,7 +1561,7 @@ async function verifyAuditQuickAdd(){
     if(!data.careerAudit)data.careerAudit={};
     data.careerAudit[nameKey(current.name)]={url:current.careers_url,ats:parsed.ats,board:parsed.board,verified:true,found:result.total,checkedAt:new Date().toISOString()};
     save();renderCareerAudit();
-    message.textContent='✓ Feed verificato ('+result.total+' offerte). Salvato localmente. '+(result.monitored?'È già monitorato.':'Ora puoi approvarne l’attivazione dall’audit; il link ufficiale resta consultabile.');
+    message.textContent='✓ Feed verificato ('+result.total+(result.scope==='EMEA'?' offerte EMEA su '+result.globalTotal+' globali':' offerte')+'). Salvato localmente. '+(result.monitored?'È già monitorato.':'Ora puoi approvarne l’attivazione dall’audit; il link ufficiale resta consultabile.');
   }catch(e){
      const networkError=e?.name==='TimeoutError'||e?.name==='AbortError'?'La verifica ha superato il tempo massimo.':/Failed to fetch/i.test(String(e?.message||''))?'Il browser non riesce a comunicare con l’API (rete, CORS oppure servizio non disponibile).':String(e.message||e);
      message.textContent='Verifica non riuscita: '+networkError+' Non è stato salvato nulla.';
