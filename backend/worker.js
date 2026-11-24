@@ -321,6 +321,35 @@ function lsegCountryCode(raw){
  if(/^[a-z]{2}$/.test(value))return value.toUpperCase();
  return LSEG_ISO_BY_NAME.get(value)||null;
 }
+// Workday may nest country filters under locationMainGroup -> locationHierarchy1.
+// Select only a recognized country facet. Never apply arbitrary location IDs.
+function lsegFindCountryFacet(facets){
+ const candidates=[];
+ const visit=(node,depth)=>{
+  if(!node||typeof node!=='object'||depth>6)return;
+  const parameter=String(node.facetParameter||''),values=Array.isArray(node.values)?node.values:[];
+  if(values.length&&(/country/i.test(parameter)||/^locationHierarchy1$/i.test(parameter))){
+   const leaves=values.filter(v=>v&&typeof v==='object'&&!Array.isArray(v.values)&&typeof v.id==='string');
+   const supported=leaves.filter(v=>LSEG_EMEA_CODES.has(lsegCountryCode(v.descriptor||v.name||v.label)));
+   candidates.push({node,leaves,score:supported.length,preference:/country/i.test(parameter)?1:0});
+  }
+  for(const item of values)if(Array.isArray(item?.values))visit(item,depth+1);
+ };
+ for(const facet of Array.isArray(facets)?facets:[])visit(facet,0);
+ candidates.sort((a,b)=>b.score-a.score||b.preference-a.preference);
+ return candidates[0]||null;
+}
+function lsegFacetSummary(facets){
+ const names=new Set();
+ const visit=(node,depth)=>{
+  if(!node||typeof node!=='object'||depth>5)return;
+  const name=String(node.facetParameter||'').slice(0,55);
+  if(name)names.add(name);
+  for(const child of Array.isArray(node.values)?node.values:[])if(Array.isArray(child?.values))visit(child,depth+1);
+ };
+ for(const facet of Array.isArray(facets)?facets:[])visit(facet,0);
+ return [...names].slice(0,12).join(', ').slice(0,300);
+}
 async function getLsegEmeaJobs(site,{probe=false,diagnostic=null}={}){
  const url='https://'+site.host+'/wday/cxs/'+encodeURIComponent(site.tenant)+'/'+encodeURIComponent(site.site)+'/jobs';
  const page=async(appliedFacets,offset)=>{
@@ -334,21 +363,22 @@ async function getLsegEmeaJobs(site,{probe=false,diagnostic=null}={}){
  };
  try{
   const first=await page({},0),globalTotal=Number(first.total)||first.jobPostings.length;
-  // Prefer site-declared country facets; names/UUIDs vary by Workday tenant.
-  const facet=(Array.isArray(first.facets)?first.facets:[]).find(f=>
-   /country/i.test(String(f.facetParameter||''))&&Array.isArray(f.values)&&f.values.length>0);
-  if(!facet){
-   if(diagnostic)diagnostic.error='LSEG: filtro Paese Workday non disponibile; nessun annuncio importato per evitare copertura parziale';
+  // Country options may be nested (locationMainGroup -> locationHierarchy1).
+  const candidate=lsegFindCountryFacet(first.facets);
+  const facet=candidate?.node,values=candidate?.leaves||[];
+  if(!facet||!values.length){
+   if(diagnostic)diagnostic.error='LSEG: filtro Paese non individuato tra le opzioni Workday ('+
+     (lsegFacetSummary(first.facets)||'nessun filtro restituito')+'); nessun annuncio importato';
    return null;
   }
   const selected=[],unknown=[];
-  for(const v of facet.values){
+  for(const v of values){
    const label=String(v.descriptor||v.name||v.label||'').trim();
    const code=lsegCountryCode(label);
    if(!code){unknown.push(label.slice(0,90));continue}
    if(LSEG_EMEA_CODES.has(code)&&typeof v.id==='string'&&v.id.length<=120)selected.push({id:v.id,country:label});
   }
-  const facetHasMore=Number(facet.totalValues||facet.totalValueCount||facet.valuesTotal||0)>facet.values.length;
+  const facetHasMore=Number(facet.totalValues||facet.totalValueCount||facet.valuesTotal||0)>values.length;
   if(!selected.length||unknown.length||facetHasMore){
    if(diagnostic)diagnostic.error='LSEG: filtro geografico incompleto ('+
      (unknown.length?'Paesi non classificati: '+unknown.slice(0,5).join(', '):'')+
