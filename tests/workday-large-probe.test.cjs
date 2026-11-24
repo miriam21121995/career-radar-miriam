@@ -17,7 +17,7 @@ const ctx={URL,AbortSignal,encodeURIComponent,console,fetch:async(url,opts)=>{
 vm.createContext(ctx);
 vm.runInContext(code.slice(begin,end)+';globalThis.read=getWorkdayJobs;',ctx);
 (async()=>{
- const careers='https://lseg.wd3.myworkdayjobs.com/en-US/Careers';
+ const careers='https://largecorp.wd3.myworkdayjobs.com/en-US/Careers';
  const large=await ctx.read({careers},{probe:true});
  assert.equal(large.length,20);
  assert.equal(large.reportedTotal,655);
@@ -35,5 +35,5 @@ vm.runInContext(code.slice(begin,end)+';globalThis.read=getWorkdayJobs;',ctx);
  assert.equal(small.partial,false);
  assert.equal(small.probeLimitExceeded,undefined);
  assert.equal(requests.length,6);
- console.log('PASS: LSEG oversized board fast safe probe, Euronext full probe unchanged');
+ console.log('PASS: generic oversized Workday board fast safe probe, Euronext unchanged');
 })().catch(e=>{console.error(e);process.exitCode=1});
