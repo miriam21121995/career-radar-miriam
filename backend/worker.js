@@ -263,9 +263,9 @@ async function getTeamtailorJobs(spec){
   return null;
 }
 
-// Cloudflare Workers does not support redirect:'error' (synchronous TypeError).
-// Explicit redirect:'manual' keeps ATS requests pinned to reviewed hosts;
-// a 3xx fails the !response.ok checks rather than following the redirect.
+// Cloudflare Workers throws a TypeError for the unsupported 'error' redirect mode.
+// Use manual redirect handling so ATS requests stay on reviewed hosts;
+// HTTP 3xx responses fail the existing !response.ok checks.
 // V22: optional read-only Workday CXS connector. A Workday careers URL must be supplied
 // explicitly and reviewed; the tenant / site are never guessed from a company name.
 // Workday is an undocumented endpoint. Failures must not close previously indexed jobs.
