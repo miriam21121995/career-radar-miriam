@@ -291,6 +291,16 @@ function workdayLocationLabel(v){
 // LSEG's global Workday board has hundreds of jobs. Apply the verified country
 // facet BEFORE paging; never filter only the first N global jobs.
 const LSEG_EMEA_CODES=new Set(('AD AE AL AM AO AT AZ BA BE BF BG BH BI BJ BW BY CD CF CG CH CI CM CV CY CZ DE DJ DK DZ EE EG ER ES ET FI FO FR GA GB GE GG GH GI GM GN GQ GR GW HR HU IE IL IM IQ IR IS IT JE JO KE KM KW LB LI LR LS LT LU LV LY MA MC MD ME MG MK ML MR MT MU MW MZ NA NE NG NL NO OM PL PS PT QA RE RO RS RU RW SA SC SD SE SH SI SJ SK SL SM SN SO SS ST SY SZ TD TG TN TR TZ UA UG VA XK YE YT ZA ZM ZW KZ').split(' '));
+// Build this lookup only once per Worker isolate to stay inside Free CPU quotas.
+const LSEG_ISO_BY_NAME=(()=>{
+ const map=new Map(),display=new Intl.DisplayNames(['en'],{type:'region'});
+ const normalize=x=>String(x||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('en').replace(/[^a-z0-9]+/g,' ').trim();
+ for(let a=65;a<=90;a++)for(let b=65;b<=90;b++){
+  const code=String.fromCharCode(a,b),name=display.of(code);
+  if(name!==code)map.set(normalize(name),code);
+ }
+ return map;
+})();
 function lsegCountryCode(raw){
  const normalize=x=>String(x||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('en').replace(/[^a-z0-9]+/g,' ').trim();
  const value=normalize(raw);if(!value)return null;
@@ -309,12 +319,7 @@ function lsegCountryCode(raw){
  };
  if(exceptions[value])return exceptions[value];
  if(/^[a-z]{2}$/.test(value))return value.toUpperCase();
- const names=new Intl.DisplayNames(['en'],{type:'region'});
- for(let a=65;a<=90;a++)for(let b=65;b<=90;b++){
-  const code=String.fromCharCode(a,b),name=names.of(code);
-  if(name!==code&&normalize(name)===value)return code;
- }
- return null;
+ return LSEG_ISO_BY_NAME.get(value)||null;
 }
 async function getLsegEmeaJobs(site,{probe=false,diagnostic=null}={}){
  const url='https://'+site.host+'/wday/cxs/'+encodeURIComponent(site.tenant)+'/'+encodeURIComponent(site.site)+'/jobs';
