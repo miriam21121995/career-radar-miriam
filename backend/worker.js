@@ -618,7 +618,8 @@ async function monitoredSources(env){
   if(!env.DB)return registry;
   const rows=await env.DB.prepare(`SELECT name,sector,location,website_url,careers_url,source_type
     FROM companies WHERE monitoring_status='active'
-      AND source_type IN ('greenhouse','lever','ashby','smartrecruiters','teamtailor','workday','workable','recruitee','phenom') AND careers_url IS NOT NULL`).all();
+      AND source_type IN ('greenhouse','lever','ashby','smartrecruiters','teamtailor','workday','workable','recruitee','phenom') AND careers_url IS NOT NULL
+     ORDER BY LOWER(name), name`).all();
   for(const row of rows.results||[]){
     const validated=publicBoardSpec(row.careers_url);
     if(!validated||validated.ats!==row.source_type)continue;
@@ -629,7 +630,8 @@ async function monitoredSources(env){
     registry.push([id,{...validated,name:String(row.name||'').slice(0,160),sector:row.sector||'Da classificare',
       location:row.location||'',website:validURL(row.website_url)||validated.careers}]);
   }
-  return registry.slice(0,180);
+  // Never silently discard approved sources beyond the old limit of 180.
+  return registry;
 }
 async function refreshCompany(request, env, origin, slug) {
   const spec=(await monitoredSources(env)).find(([id])=>id===slug)?.[1];
@@ -718,7 +720,7 @@ async function markMissingClosed(db,companyId,currentJobs){
 
 // Scheduled import executes inside Cloudflare; the ADMIN_TOKEN is never exposed to the browser.
 // Configure cron `*/30 * * * *` in Cloudflare Worker > Settings > Triggers.
-// Three sources per run. With 36 sources the rotation takes ~6 hours at */30 cron.
+// One source per five-minute run, with up to 288 scheduled source checks daily.
 
 // V31: source-level diagnostics. Created lazily on the first real refresh;
 // the existing jobs, companies and refresh_runs tables are left untouched.
@@ -744,8 +746,8 @@ async function trackSourceRun(env,scheduledTime,sourceIndex,entries){
   let healthAvailable=false;
   try{await ensureSourceHealth(env.DB);healthAvailable=true}
   catch(e){console.error('Source health schema unavailable',String(e))}
-  let failure=null;
-  try {await runScheduledSource(env,scheduledTime,sourceIndex,entries)}
+  let failure=null,quality=null;
+  try {quality=await runScheduledSource(env,scheduledTime,sourceIndex,entries)}
   catch(e){failure=e}
   if(healthAvailable){
     try{
@@ -755,20 +757,22 @@ async function trackSourceRun(env,scheduledTime,sourceIndex,entries){
           JOIN companies c ON c.id=j.company_id WHERE c.name=? AND j.status='active'`).bind(spec.name).first();
         found=Number(result?.n)||0;
       }
-      const status=failure?'error':'success';
+      const degraded=!failure&&Boolean(quality?.partial||quality?.locationCoverageIncomplete);
+      const status=failure?'error':degraded?'partial':'success';
+      const detail=failure?String(failure?.message||failure).slice(0,350):degraded?'Importazione parziale: '+Number(quality?.imported||0)+' su '+Number(quality?.total||0)+' offerte dichiarate'+(quality?.locationCoverageIncomplete?' (alcune sedi non verificate)':''):null;
       await env.DB.prepare(`INSERT INTO source_health
         (source_key,source_name,status,checked_at,success_at,error_at,error_text,jobs_found,duration_ms)
         VALUES (?,?,?,CURRENT_TIMESTAMP,CASE WHEN ?='success' THEN CURRENT_TIMESTAMP ELSE NULL END,
-          CASE WHEN ?='error' THEN CURRENT_TIMESTAMP ELSE NULL END,?,?,?)
+          CASE WHEN ? IN ('error','partial') THEN CURRENT_TIMESTAMP ELSE NULL END,?,?,?)
         ON CONFLICT(source_key) DO UPDATE SET
           source_name=excluded.source_name,status=excluded.status,checked_at=CURRENT_TIMESTAMP,
           success_at=CASE WHEN excluded.status='success' THEN CURRENT_TIMESTAMP ELSE source_health.success_at END,
-          error_at=CASE WHEN excluded.status='error' THEN CURRENT_TIMESTAMP ELSE source_health.error_at END,
+          error_at=CASE WHEN excluded.status IN ('error','partial') THEN CURRENT_TIMESTAMP ELSE source_health.error_at END,
           error_text=excluded.error_text,
-          jobs_found=CASE WHEN excluded.status='success' THEN excluded.jobs_found ELSE source_health.jobs_found END,
+          jobs_found=CASE WHEN excluded.status IN ('success','partial') THEN excluded.jobs_found ELSE source_health.jobs_found END,
           duration_ms=excluded.duration_ms`)
         .bind(sourceKey(spec),spec.name,status,status,status,
-          failure?String(failure?.message||failure).slice(0,350):null,found,Date.now()-started).run();
+          detail,found,Date.now()-started).run();
     }catch(e){console.error('Source health recording failed',slug,String(e))}
   }
   if(failure)throw failure;
@@ -777,7 +781,7 @@ async function trackSourceRun(env,scheduledTime,sourceIndex,entries){
 async function runScheduledSource(env, scheduledTime, sourceIndex=null, suppliedEntries=null){
   const entries=suppliedEntries||await monitoredSources(env);
   if(!env.DB || !entries.length) return;
-  const index=sourceIndex===null?Math.floor((Number(scheduledTime)||Date.now())/(30*60*1000))%entries.length:sourceIndex;
+  const index=sourceIndex===null?Math.floor((Number(scheduledTime)||Date.now())/(5*60*1000))%entries.length:sourceIndex;
   const [slug,spec]=entries[index];
   const payload=await getATSJobs(spec);
   if(!payload) throw Error('Feed non disponibile: '+slug);
@@ -812,9 +816,11 @@ async function runScheduledSource(env, scheduledTime, sourceIndex=null, supplied
       await db.batch(statements);
     }
     if(jobs.length>0&&!payload.partial) await markMissingClosed(db,company.id,jobs);
-    await db.prepare(`UPDATE refresh_runs SET status='success',completed_at=CURRENT_TIMESTAMP,
-      companies_checked=1,jobs_found=?,jobs_new=? WHERE id=?`).bind(jobs.length,inserted,runId).run();
-    console.log('Scheduled source refreshed',slug,jobs.length,inserted);
+    const qualityPartial=Boolean(payload.partial||payload.locationCoverageIncomplete||(Number(payload.reportedTotal)>jobs.length));
+    await db.prepare(`UPDATE refresh_runs SET status=?,completed_at=CURRENT_TIMESTAMP,
+      companies_checked=1,jobs_found=?,jobs_new=? WHERE id=?`).bind(qualityPartial?'partial':'success',jobs.length,inserted,runId).run();
+    console.log('Scheduled source refreshed',slug,jobs.length,inserted,qualityPartial?'partial':'complete');
+    return {partial:qualityPartial,locationCoverageIncomplete:Boolean(payload.locationCoverageIncomplete),total:payload.reportedTotal??jobs.length,imported:jobs.length};
   }catch(e){
     await db.prepare(`UPDATE refresh_runs SET status='error',completed_at=CURRENT_TIMESTAMP WHERE id=?`).bind(runId).run();
     throw e;
@@ -1103,16 +1109,14 @@ async function careersWebDiscovery(request,url,env,origin){
 export default {
   async scheduled(event,env,ctx){
     ctx.waitUntil((async()=>{
-      // Three independent sources per scheduled slot. Failures are isolated:
-      // a broken board cannot prevent importing the other two.
+      // One source per 5-minute cron limits Free CPU/subrequests per execution.
+      // A failed board is recorded and retried during the next rotation.
       const entries=await monitoredSources(env);
       if(!entries.length)return;
-      const slot=Math.floor((Number(event.scheduledTime)||Date.now())/(30*60*1000));
-      for(let i=0;i<Math.min(3,entries.length);i++){
-        const idx=(slot*3+i)%entries.length;
-        try { await trackSourceRun(env, event.scheduledTime, idx, entries); }
-        catch(e){console.error('Scheduled source failed',entries[idx][0],String(e));}
-      }
+      const slot=Math.floor((Number(event.scheduledTime)||Date.now())/(5*60*1000));
+      const idx=slot%entries.length;
+      try { await trackSourceRun(env, event.scheduledTime, idx, entries); }
+      catch(e){console.error('Scheduled source failed',entries[idx][0],String(e));}
     })());
   },
   async fetch(request, env) {
@@ -1184,7 +1188,8 @@ export default {
         const last=await env.DB.prepare('SELECT id,status,completed_at,jobs_found,jobs_new FROM refresh_runs ORDER BY id DESC LIMIT 1').first();
         return json({ok:true,sources,totalSources:sources.length,checkedSources:checked,
           sourcesWithJobs:withJobs,neverChecked,lastRun:last||null,
-          automaticRotation:'3 fonti ogni 30 minuti; durata ciclo dipendente dal numero di fonti approvate',
+          automaticRotation:'1 fonte ogni 5 minuti; fino a 288 controlli al giorno',
+           rotationMinutes:sources.length*5,
           diagnosticsVersion:31,
           note:'Il conteggio include solo le bacheche collegate, non il mercato mondiale. Fonti senza dati non sono necessariamente vuote.'},200,origin);
       }catch(e){console.error('coverage error',e);return fail('Copertura temporaneamente non disponibile',500,origin)}
