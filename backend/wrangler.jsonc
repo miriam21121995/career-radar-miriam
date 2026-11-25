@@ -14,5 +14,12 @@
     "crons": [
       "*/5 * * * *"
     ]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
   }
 }
